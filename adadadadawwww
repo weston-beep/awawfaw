@@ -1,0 +1,113 @@
+-- Auto BHop (standalone, key controlled by _G.BHopToggleKey)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LP = Players.LocalPlayer
+
+-- Cleanup previous instance if any
+if _G.BHopCleanup then _G.BHopCleanup() end
+
+local autoJump = false
+local wasOnGround = true
+local jumpUntil = 0
+local jumpWindow = 0.25
+
+-- Connections to be cleaned up
+local connections = {}
+
+-- Get GameConfigs (optional)
+local ClientModules = ReplicatedStorage:FindFirstChild("ClientModules")
+local GameConfigs = ClientModules and ClientModules:FindFirstChild("ClientGameConfigs") and require(ClientModules:FindFirstChild("ClientGameConfigs"))
+local originalBhopTime = GameConfigs and GameConfigs.BhopActivateTime
+
+-- Get PlayerModule and Controls
+local PlayerModule = require(LP.PlayerScripts:WaitForChild("PlayerModule"))
+local Controls = PlayerModule:GetControls()
+
+-- Toggle function
+local function toggleBHop(state)
+    if state then
+        if GameConfigs then
+            GameConfigs.BhopActivateTime = 0
+        end
+        -- immediate jump if on ground and moving
+        local char = LP.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and hum.MoveDirection.Magnitude > 0.1 then
+                jumpUntil = tick() + jumpWindow
+            end
+        end
+    else
+        if GameConfigs and originalBhopTime then
+            GameConfigs.BhopActivateTime = originalBhopTime
+        end
+        -- reset jump flag
+        local controller = Controls.activeController
+        if controller then
+            controller.jumpRequested = false
+            if controller.UpdateJump then controller:UpdateJump() end
+        end
+    end
+end
+
+-- Input handler
+local inputCon = UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    local inputName = (input.KeyCode ~= Enum.KeyCode.Unknown and input.KeyCode.Name) or input.UserInputType.Name
+    if inputName == _G.BHopToggleKey then
+        autoJump = not autoJump
+        toggleBHop(autoJump)
+    end
+end)
+table.insert(connections, inputCon)
+
+-- Main loop
+local heartbeatCon = RunService.Heartbeat:Connect(function()
+    if not autoJump then return end
+
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+
+    local onGround = hum.FloorMaterial ~= Enum.Material.Air
+    local moving = hum.MoveDirection.Magnitude > 0.1
+
+    if not wasOnGround and onGround and moving then
+        jumpUntil = tick() + jumpWindow
+    end
+
+    if tick() < jumpUntil then
+        local controller = Controls.activeController
+        if controller then
+            controller.jumpRequested = true
+            if controller.UpdateJump then controller:UpdateJump() end
+        end
+        hum.Jump = true
+    else
+        local controller = Controls.activeController
+        if controller and controller.jumpRequested then
+            controller.jumpRequested = false
+            if controller.UpdateJump then controller:UpdateJump() end
+        end
+    end
+
+    wasOnGround = onGround
+end)
+table.insert(connections, heartbeatCon)
+
+-- Cleanup function
+_G.BHopCleanup = function()
+    for _, con in ipairs(connections) do
+        con:Disconnect()
+    end
+    connections = {}
+    if autoJump then
+        autoJump = false
+        toggleBHop(false)
+    end
+end
+
+print("Auto BHop loaded. Toggle key:", _G.BHopToggleKey)
